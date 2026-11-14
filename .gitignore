@@ -1,0 +1,10 @@
+# Python virtual environment
+.venv/
+venv/
+
+# Environment variables (NEVER commit your real API key!)
+.env
+
+# Python cache
+__pycache__/
+*.py[cod]
