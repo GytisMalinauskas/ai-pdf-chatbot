@@ -5,11 +5,13 @@ import io
 import os
 from dotenv import load_dotenv
 from google import genai
+from google.genai.errors import APIError
 import numpy as np
 from pypdf import PdfReader
 from pypdf.errors import PdfReadError
 
 EMBEDDING_MODEL = "gemini-embedding-001"
+CHAT_MODELS = ["gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash"]
 
 
 def get_genai_client() -> genai.Client:
@@ -158,4 +160,63 @@ class InMemoryVectorStore:
         scores = cosine_similarity(query_vec, self.embeddings)
         top_indices = np.argsort(scores)[::-1][:top_k]
         return [(self.chunks[idx], float(scores[idx])) for idx in top_indices]
+
+
+def generate_answer(
+    question: str,
+    store: InMemoryVectorStore,
+    client: genai.Client,
+    top_k: int = 4,
+) -> dict:
+    """Retrieve relevant chunks and ask Gemini to answer strictly from them."""
+    cleaned_question = question.strip()
+    if not cleaned_question:
+        raise ValueError("Question cannot be empty.")
+
+    results = store.search(cleaned_question, client, top_k=top_k)
+
+    context_blocks = [
+        f"[Excerpt {i} | Page {chunk.page}]\n{chunk.text}"
+        for i, (chunk, _score) in enumerate(results, start=1)
+    ]
+    context_text = "\n\n".join(context_blocks)
+
+    prompt = (
+        "You are a helpful assistant answering questions about an uploaded PDF.\n"
+        "Use ONLY the document excerpts below to answer the question.\n"
+        "If the answer is not in the excerpts, say: "
+        '"I couldn\'t find that information in the uploaded document."\n'
+        "Mention the page number(s) when citing facts.\n\n"
+        f"--- DOCUMENT EXCERPTS ---\n{context_text}\n\n"
+        f"--- QUESTION ---\n{cleaned_question}\n"
+    )
+
+    response = None
+    last_error: Exception | None = None
+    for model_name in CHAT_MODELS:
+        try:
+            response = client.models.generate_content(
+                model=model_name,
+                contents=prompt,
+            )
+            break
+        except APIError as exc:
+            last_error = exc
+            continue
+
+    if response is None:
+        raise RuntimeError(f"All Gemini chat models failed: {last_error}") from last_error
+
+    answer_text = (response.text or "").strip() or "No response generated."
+    sources = [
+        {
+            "page": chunk.page,
+            "score": round(score, 4),
+            "excerpt": chunk.text[:200] + ("..." if len(chunk.text) > 200 else ""),
+        }
+        for chunk, score in results
+    ]
+
+    return {"answer": answer_text, "sources": sources}
+
 
