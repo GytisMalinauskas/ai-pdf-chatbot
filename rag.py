@@ -2,8 +2,25 @@
 
 from dataclasses import dataclass
 import io
+import os
+from dotenv import load_dotenv
+from google import genai
+import numpy as np
 from pypdf import PdfReader
 from pypdf.errors import PdfReadError
+
+EMBEDDING_MODEL = "gemini-embedding-001"
+
+
+def get_genai_client() -> genai.Client:
+    """Load the API key from .env and return an authenticated Gemini client."""
+    load_dotenv()
+    api_key = os.getenv("GEMINI_API_KEY", "").strip()
+    if not api_key or api_key == "your_api_key_here":
+        raise RuntimeError(
+            "GEMINI_API_KEY is missing. Add your key to the .env file."
+        )
+    return genai.Client(api_key=api_key)
 
 
 @dataclass
@@ -72,3 +89,73 @@ def chunk_pages(
             start += step
 
     return chunks
+
+
+def embed_texts(
+    texts: list[str],
+    client: genai.Client,
+    batch_size: int = 50,
+) -> np.ndarray:
+    """Convert a list of strings into a 2D NumPy array of embedding vectors."""
+    if not texts:
+        return np.empty((0, 0), dtype=np.float32)
+
+    vectors: list[list[float]] = []
+    for i in range(0, len(texts), batch_size):
+        batch = texts[i : i + batch_size]
+        response = client.models.embed_content(
+            model=EMBEDDING_MODEL,
+            contents=batch,
+        )
+        for embedding in response.embeddings:
+            vectors.append(embedding.values)
+
+    return np.array(vectors, dtype=np.float32)
+
+
+def cosine_similarity(query_vec: np.ndarray, doc_matrix: np.ndarray) -> np.ndarray:
+    """Compute cosine similarity between one query vector and all document vectors."""
+    query_norm = np.linalg.norm(query_vec) + 1e-10
+    doc_norms = np.linalg.norm(doc_matrix, axis=1) + 1e-10
+    return (doc_matrix @ query_vec) / (doc_norms * query_norm)
+
+
+class InMemoryVectorStore:
+    """Simple in-memory vector store for the currently uploaded PDF."""
+
+    def __init__(self) -> None:
+        self.filename: str | None = None
+        self.chunks: list[Chunk] = []
+        self.embeddings: np.ndarray | None = None
+
+    @property
+    def is_ready(self) -> bool:
+        return self.embeddings is not None and len(self.chunks) > 0
+
+    def index_chunks(
+        self,
+        chunks: list[Chunk],
+        client: genai.Client,
+        filename: str,
+    ) -> None:
+        """Embed all chunks and store them in memory, replacing any previous PDF."""
+        texts = [c.text for c in chunks]
+        self.embeddings = embed_texts(texts, client)
+        self.chunks = chunks
+        self.filename = filename
+
+    def search(
+        self,
+        query: str,
+        client: genai.Client,
+        top_k: int = 4,
+    ) -> list[tuple[Chunk, float]]:
+        """Return the top_k most semantically similar chunks for a question."""
+        if not self.is_ready or self.embeddings is None:
+            raise ValueError("No document has been indexed yet.")
+
+        query_vec = embed_texts([query], client)[0]
+        scores = cosine_similarity(query_vec, self.embeddings)
+        top_indices = np.argsort(scores)[::-1][:top_k]
+        return [(self.chunks[idx], float(scores[idx])) for idx in top_indices]
+
