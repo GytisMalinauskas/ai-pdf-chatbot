@@ -5,9 +5,10 @@ import unittest
 from unittest.mock import MagicMock
 
 from fastapi.testclient import TestClient
+import numpy as np
 
 import app as app_module
-from rag import get_genai_client
+from rag import get_embedding_model, get_genai_client
 
 
 def build_minimal_pdf(text: str) -> bytes:
@@ -53,19 +54,26 @@ class TestApiEndpoints(unittest.TestCase):
         app_module.vector_store.chunks = []
         app_module.vector_store.embeddings = None
 
+        self.mock_embedder = MagicMock()
+        self.mock_embedder.embed.return_value = [np.array([1.0, 0.0], dtype=np.float32)]
+
         self.mock_client = MagicMock()
-        self.mock_client.models.embed_content.return_value = SimpleNamespace(
-            embeddings=[SimpleNamespace(values=[1.0, 0.0])]
-        )
         self.mock_client.models.generate_content.return_value = SimpleNamespace(
             text="FastAPI is used to build Python APIs (Page 1)."
         )
 
+        app_module.app.dependency_overrides[get_embedding_model] = lambda: self.mock_embedder
         app_module.app.dependency_overrides[get_genai_client] = lambda: self.mock_client
         self.client = TestClient(app_module.app)
 
     def tearDown(self) -> None:
         app_module.app.dependency_overrides.clear()
+
+    def test_home_serves_html_ui(self) -> None:
+        res = self.client.get("/")
+        self.assertEqual(res.status_code, 200)
+        self.assertIn("text/html", res.headers["content-type"])
+        self.assertIn("AI PDF Chatbot", res.text)
 
     def test_health_initially_has_no_document(self) -> None:
         res = self.client.get("/health")
@@ -102,12 +110,14 @@ class TestApiEndpoints(unittest.TestCase):
         self.assertEqual(upload_res.json()["filename"], "guide.pdf")
         self.assertEqual(upload_res.json()["pages"], 1)
         self.assertGreaterEqual(upload_res.json()["chunks"], 1)
+        self.assertIn("embed_ms", upload_res.json()["timings"])
 
         ask_res = self.client.post("/ask", json={"question": "What is FastAPI used for?"})
         self.assertEqual(ask_res.status_code, 200)
         data = ask_res.json()
         self.assertEqual(data["answer"], "FastAPI is used to build Python APIs (Page 1).")
         self.assertEqual(data["sources"][0]["page"], 1)
+        self.assertIn("llm_generate_ms", data["timings"])
 
 
 if __name__ == "__main__":

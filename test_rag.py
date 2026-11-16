@@ -1,8 +1,8 @@
-"""Unit tests for rag.py (runs offline using mock Gemini responses)."""
+"""Unit tests for rag.py (runs offline using mock embedder and mock Gemini)."""
 
 import unittest
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 
@@ -11,23 +11,22 @@ from rag import (
     InMemoryVectorStore,
     chunk_pages,
     cosine_similarity,
+    embed_texts,
     extract_pages_from_pdf,
     generate_answer,
 )
 
 
-def make_mock_client(
-    embeddings: list[list[float]] | None = None,
-    answer_text: str = "Mocked answer (Page 1).",
-) -> MagicMock:
-    """Create a fake Gemini client so tests run fast and offline."""
+def make_mock_embedder(vectors: list[list[float]]) -> MagicMock:
+    """Create a fake local TextEmbedding model returning fixed vectors."""
+    embedder = MagicMock()
+    embedder.embed.return_value = [np.array(vec, dtype=np.float32) for vec in vectors]
+    return embedder
+
+
+def make_mock_client(answer_text: str = "Mocked answer (Page 1).") -> MagicMock:
+    """Create a fake Gemini client for chat generation."""
     client = MagicMock()
-
-    if embeddings is not None:
-        client.models.embed_content.return_value = SimpleNamespace(
-            embeddings=[SimpleNamespace(values=vec) for vec in embeddings]
-        )
-
     client.models.generate_content.return_value = SimpleNamespace(text=answer_text)
     return client
 
@@ -71,13 +70,13 @@ class TestVectorSearch(unittest.TestCase):
             Chunk(text="Cats sleep all day.", page=1, chunk_index=0),
             Chunk(text="Rockets launch into orbit.", page=2, chunk_index=1),
         ]
-        index_client = make_mock_client(embeddings=[[1.0, 0.0], [0.0, 1.0]])
+        index_embedder = make_mock_embedder([[1.0, 0.0], [0.0, 1.0]])
 
         store = InMemoryVectorStore()
-        store.index_chunks(chunks, index_client, filename="sample.pdf")
+        store.index_chunks(chunks, filename="sample.pdf", embedder=index_embedder)
 
-        search_client = make_mock_client(embeddings=[[0.0, 1.0]])
-        results = store.search("space launch", search_client, top_k=1)
+        search_embedder = make_mock_embedder([[0.0, 1.0]])
+        results = store.search("space launch", top_k=1, embedder=search_embedder)
 
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0][0].page, 2)
@@ -86,7 +85,20 @@ class TestVectorSearch(unittest.TestCase):
     def test_search_before_indexing_raises(self) -> None:
         store = InMemoryVectorStore()
         with self.assertRaises(ValueError):
-            store.search("anything", make_mock_client(), top_k=1)
+            store.search("anything", top_k=1, embedder=make_mock_embedder([[1.0, 0.0]]))
+
+    @patch("rag.get_embedding_model")
+    def test_embed_texts_falls_back_to_cpu_on_cuda_error(
+        self, mock_get_model: MagicMock
+    ) -> None:
+        gpu_embedder = MagicMock()
+        gpu_embedder.embed.side_effect = RuntimeError("cuDNN is unavailable: cudnn64_9.dll")
+        cpu_embedder = make_mock_embedder([[0.25, 0.75]])
+        mock_get_model.side_effect = [gpu_embedder, cpu_embedder]
+
+        result = embed_texts(["hello"])
+        self.assertEqual(result.shape, (1, 2))
+        mock_get_model.assert_any_call(force_cpu=True)
 
 
 class TestGenerateAnswer(unittest.TestCase):
@@ -98,17 +110,19 @@ class TestGenerateAnswer(unittest.TestCase):
     def test_generate_answer_returns_answer_and_sources(self) -> None:
         chunks = [Chunk(text="FastAPI is fast.", page=1, chunk_index=0)]
         store = InMemoryVectorStore()
-        store.index_chunks(chunks, make_mock_client(embeddings=[[1.0, 0.0]]), "doc.pdf")
+        store.index_chunks(chunks, "doc.pdf", embedder=make_mock_embedder([[1.0, 0.0]]))
 
-        ask_client = make_mock_client(
-            embeddings=[[1.0, 0.0]],
-            answer_text="FastAPI is fast (Page 1).",
+        ask_embedder = make_mock_embedder([[1.0, 0.0]])
+        ask_client = make_mock_client(answer_text="FastAPI is fast (Page 1).")
+        result = generate_answer(
+            "What is FastAPI?", store, ask_client, top_k=1, embedder=ask_embedder
         )
-        result = generate_answer("What is FastAPI?", store, ask_client, top_k=1)
 
         self.assertEqual(result["answer"], "FastAPI is fast (Page 1).")
         self.assertEqual(len(result["sources"]), 1)
         self.assertEqual(result["sources"][0]["page"], 1)
+        self.assertIn("llm_generate_ms", result["timings"])
+        self.assertIn("vector_search_ms", result["timings"])
 
 
 if __name__ == "__main__":

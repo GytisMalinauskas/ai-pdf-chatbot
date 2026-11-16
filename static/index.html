@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI PDF Chatbot</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
+  <style>
+    .markdown-body p { margin-bottom: 0.6rem; }
+    .markdown-body p:last-child { margin-bottom: 0; }
+    .markdown-body ul, .markdown-body ol { margin: 0.5rem 0 0.6rem 1.25rem; }
+    .markdown-body ul { list-style-type: disc; }
+    .markdown-body ol { list-style-type: decimal; }
+    .markdown-body li { margin-bottom: 0.25rem; }
+    .markdown-body strong { color: #f8fafc; font-weight: 600; }
+    .markdown-body code { background: rgba(15, 23, 42, 0.8); padding: 0.15rem 0.35rem; border-radius: 0.35rem; font-size: 0.85em; color: #a5b4fc; }
+    .markdown-body pre { background: rgba(15, 23, 42, 0.9); padding: 0.75rem; border-radius: 0.6rem; overflow-x: auto; margin: 0.5rem 0; border: 1px solid #334155; }
+    .markdown-body pre code { background: transparent; padding: 0; }
+    .markdown-body h1, .markdown-body h2, .markdown-body h3 { font-weight: 600; color: #f8fafc; margin: 0.75rem 0 0.35rem; }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen flex items-center justify-center p-4 sm:p-6 antialiased selection:bg-indigo-500/30">
+  <div class="w-full max-w-4xl h-[calc(100vh-3rem)] min-h-[600px] bg-slate-900/80 backdrop-blur-xl border border-slate-800 rounded-2xl shadow-2xl shadow-black/50 flex flex-col overflow-hidden">
+
+    <!-- Header -->
+    <header class="px-6 py-4 border-b border-slate-800/80 flex items-center justify-between gap-4 flex-wrap bg-slate-900/60">
+      <div class="flex items-center gap-3">
+        <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center shadow-lg shadow-indigo-500/20">
+          <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+          </svg>
+        </div>
+        <div>
+          <h1 class="text-base font-semibold tracking-tight text-white">AI PDF Chatbot</h1>
+          <p class="text-xs text-slate-400">Powered by Gemini RAG · Grounded answers with citations</p>
+        </div>
+      </div>
+
+      <div id="docPill" class="inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium bg-slate-800/80 border border-slate-700 text-slate-400 transition-colors">
+        <span class="w-2 h-2 rounded-full bg-current"></span>
+        <span id="docStatusText">No PDF loaded</span>
+      </div>
+    </header>
+
+    <!-- Upload Dropzone -->
+    <section id="uploadBar" class="px-6 py-3.5 bg-slate-900/40 border-b border-slate-800/80 flex items-center justify-between gap-4 flex-wrap transition-colors">
+      <div class="flex items-center gap-2.5 text-xs sm:text-sm text-slate-400">
+        <svg class="w-4 h-4 text-indigo-400 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+        </svg>
+        <span>Drag &amp; drop a PDF here, or browse (max 20 MB)</span>
+      </div>
+      <div>
+        <input id="fileInput" type="file" accept=".pdf,application/pdf" class="hidden" />
+        <button id="uploadBtn" type="button" class="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-medium bg-indigo-600 hover:bg-indigo-500 active:scale-[0.98] text-white shadow-md shadow-indigo-600/20 transition disabled:opacity-50 disabled:cursor-not-allowed">
+          Upload PDF
+        </button>
+      </div>
+    </section>
+
+    <!-- Error Alert -->
+    <div id="alertBox" role="alert" class="hidden mx-6 mt-3 px-4 py-2.5 rounded-xl text-xs sm:text-sm bg-rose-500/10 border border-rose-500/30 text-rose-300"></div>
+
+    <!-- Chat Area -->
+    <main id="chatArea" class="flex-1 overflow-y-auto px-6 py-6 flex flex-col gap-5">
+      <div id="emptyState" class="m-auto text-center max-w-md space-y-3">
+        <div class="w-12 h-12 mx-auto rounded-2xl bg-slate-800/80 border border-slate-700 flex items-center justify-center text-indigo-400">
+          <svg class="w-6 h-6" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
+          </svg>
+        </div>
+        <h2 class="text-base font-semibold text-slate-100">Upload a PDF to start chatting</h2>
+        <p class="text-sm text-slate-400 leading-relaxed">
+          Your document is chunked, embedded with Gemini, and searched in-memory so every answer stays grounded in your file.
+        </p>
+      </div>
+    </main>
+
+    <!-- Input Footer -->
+    <form id="askForm" class="p-4 sm:px-6 border-t border-slate-800/80 bg-slate-900/60 flex items-center gap-3">
+      <input
+        id="questionInput"
+        type="text"
+        placeholder="Upload a PDF first, then ask a question..."
+        autocomplete="off"
+        disabled
+        class="flex-1 bg-slate-950/80 border border-slate-800 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 rounded-xl px-4 py-3 text-sm text-slate-100 placeholder-slate-500 outline-none transition disabled:opacity-50"
+      />
+      <button
+        id="sendBtn"
+        type="submit"
+        disabled
+        class="inline-flex items-center gap-2 px-5 py-3 rounded-xl text-sm font-medium bg-indigo-600 hover:bg-indigo-500 active:scale-[0.98] text-white shadow-md shadow-indigo-600/20 transition disabled:opacity-40 disabled:cursor-not-allowed"
+      >
+        <span>Ask</span>
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M5 12h14M12 5l7 7-7 7" />
+        </svg>
+      </button>
+    </form>
+  </div>
+
+  <script>
+    const docPill = document.getElementById("docPill");
+    const docStatusText = document.getElementById("docStatusText");
+    const uploadBar = document.getElementById("uploadBar");
+    const fileInput = document.getElementById("fileInput");
+    const uploadBtn = document.getElementById("uploadBtn");
+    const alertBox = document.getElementById("alertBox");
+    const chatArea = document.getElementById("chatArea");
+    const emptyState = document.getElementById("emptyState");
+    const askForm = document.getElementById("askForm");
+    const questionInput = document.getElementById("questionInput");
+    const sendBtn = document.getElementById("sendBtn");
+
+    let docReady = false;
+
+    function showError(message) {
+      alertBox.textContent = message;
+      alertBox.classList.remove("hidden");
+    }
+
+    function clearError() {
+      alertBox.textContent = "";
+      alertBox.classList.add("hidden");
+    }
+
+    function setDocumentReady(filename, chunks) {
+      docReady = true;
+      docPill.className =
+        "inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 transition-colors";
+      docStatusText.textContent = `${filename} · ${chunks} chunks`;
+      questionInput.disabled = false;
+      sendBtn.disabled = false;
+      questionInput.placeholder = `Ask a question about ${filename}...`;
+      questionInput.focus();
+    }
+
+    function addMessage(role, text, sources = [], isLoading = false, timingText = "") {
+      if (emptyState) {
+        emptyState.classList.add("hidden");
+      }
+
+      const wrapper = document.createElement("div");
+      wrapper.className = `flex flex-col gap-2 max-w-[85%] ${
+        role === "user" ? "self-end items-end" : "self-start items-start"
+      }`;
+
+      const bubble = document.createElement("div");
+      if (role === "user") {
+        bubble.className =
+          "px-4 py-3 rounded-2xl rounded-br-sm bg-indigo-600 text-white text-sm leading-relaxed shadow-md shadow-indigo-600/15 whitespace-pre-wrap break-words";
+        bubble.textContent = text;
+      } else {
+        bubble.className =
+          `markdown-body px-4 py-3 rounded-2xl rounded-bl-sm bg-slate-800/80 border border-slate-700/80 text-slate-100 text-sm leading-relaxed break-words ${
+            isLoading ? "animate-pulse text-slate-400" : ""
+          }`;
+        if (isLoading || typeof marked === "undefined" || typeof DOMPurify === "undefined") {
+          bubble.textContent = text;
+        } else {
+          bubble.innerHTML = DOMPurify.sanitize(marked.parse(text));
+        }
+      }
+      wrapper.appendChild(bubble);
+
+      if (sources.length > 0) {
+        const sourcesDiv = document.createElement("div");
+        sourcesDiv.className = "flex flex-wrap gap-1.5";
+        for (const src of sources) {
+          const chip = document.createElement("span");
+          chip.className =
+            "text-[11px] font-medium px-2.5 py-1 rounded-lg bg-indigo-500/10 text-indigo-300 border border-indigo-500/20 cursor-help hover:bg-indigo-500/20 transition";
+          chip.textContent = `Page ${src.page} · ${Math.round(src.score * 100)}%`;
+          chip.title = src.excerpt;
+          sourcesDiv.appendChild(chip);
+        }
+        wrapper.appendChild(sourcesDiv);
+      }
+
+      if (timingText) {
+        const meta = document.createElement("div");
+        meta.className = "text-[11px] text-slate-500 font-mono";
+        meta.textContent = timingText;
+        wrapper.appendChild(meta);
+      }
+
+      chatArea.appendChild(wrapper);
+      chatArea.scrollTop = chatArea.scrollHeight;
+      return wrapper;
+    }
+
+    async function handleUpload(file) {
+      if (!file) return;
+      clearError();
+
+      if (!file.name.toLowerCase().endsWith(".pdf")) {
+        showError("Please select a valid .pdf file.");
+        return;
+      }
+
+      uploadBtn.disabled = true;
+      uploadBtn.textContent = "Indexing...";
+
+      const formData = new FormData();
+      formData.append("file", file);
+
+      try {
+        const res = await fetch("/upload", { method: "POST", body: formData });
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data.detail || "Upload failed.");
+        }
+        setDocumentReady(data.filename, data.chunks);
+        const t = data.timings || {};
+        const uploadTiming = t.total_ms
+          ? `Extract: ${t.extract_ms}ms · Chunk: ${t.chunk_ms}ms · Embed: ${t.embed_ms}ms · Total: ${t.total_ms}ms`
+          : "";
+        addMessage(
+          "bot",
+          `Indexed "${data.filename}" (${data.pages} page(s), ${data.chunks} chunks). Ask me anything about it!`,
+          [],
+          false,
+          uploadTiming
+        );
+      } catch (err) {
+        showError(err.message);
+      } finally {
+        uploadBtn.disabled = false;
+        uploadBtn.textContent = "Upload PDF";
+        fileInput.value = "";
+      }
+    }
+
+    uploadBtn.addEventListener("click", () => fileInput.click());
+    fileInput.addEventListener("change", (e) => handleUpload(e.target.files[0]));
+
+    uploadBar.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      uploadBar.classList.add("bg-indigo-500/10", "border-indigo-500/40");
+    });
+
+    uploadBar.addEventListener("dragleave", () => {
+      uploadBar.classList.remove("bg-indigo-500/10", "border-indigo-500/40");
+    });
+
+    uploadBar.addEventListener("drop", (e) => {
+      e.preventDefault();
+      uploadBar.classList.remove("bg-indigo-500/10", "border-indigo-500/40");
+      handleUpload(e.dataTransfer.files[0]);
+    });
+
+    askForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      clearError();
+
+      const question = questionInput.value.trim();
+      if (!question || !docReady) return;
+
+      addMessage("user", question);
+      questionInput.value = "";
+      questionInput.disabled = true;
+      sendBtn.disabled = true;
+
+      const loadingMsg = addMessage("bot", "Searching document and generating answer...", [], true);
+
+      try {
+        const res = await fetch("/ask", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ question }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data.detail || "Failed to get answer.");
+        }
+        loadingMsg.remove();
+        const t = data.timings || {};
+        const modelLabel = data.model ? `Model: ${data.model} · ` : "";
+        const askTiming = t.total_ms
+          ? `${modelLabel}Embed query: ${t.embed_query_ms}ms · Search: ${t.vector_search_ms}ms · Gemini: ${t.llm_generate_ms}ms · Total: ${t.total_ms}ms`
+          : modelLabel;
+        addMessage("bot", data.answer, data.sources || [], false, askTiming);
+      } catch (err) {
+        loadingMsg.remove();
+        showError(err.message);
+      } finally {
+        questionInput.disabled = false;
+        sendBtn.disabled = false;
+        questionInput.focus();
+      }
+    });
+
+    (async () => {
+      try {
+        const res = await fetch("/health");
+        const data = await res.json();
+        if (data.document_loaded) {
+          setDocumentReady(data.filename, data.chunks);
+        }
+      } catch {
+        // Ignore initial health check errors
+      }
+    })();
+  </script>
+</body>
+</html>
