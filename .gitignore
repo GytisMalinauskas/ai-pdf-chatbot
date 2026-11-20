@@ -2,7 +2,7 @@
 .venv/
 venv/
 
-# Environment variables (NEVER commit your real API key!)
+# Environment variables
 .env
 
 # Python cache
